@@ -30,11 +30,24 @@ class TransactionRepository:
     def _to_doc(tid: str, data: dict[str, Any], user_id: str) -> Transaction:
         return Transaction.from_dict(tid, data, user_id=user_id)
 
+    @staticmethod
+    def _to_firestore_date(value: Any) -> Any:
+        """Convert a ``datetime.date`` to a Firestore-compatible ``datetime``.
+
+        Firestore's admin SDK cannot serialize ``datetime.date`` objects; it
+        only accepts ``datetime.datetime``. We normalize to UTC midnight so the
+        value round-trips consistently through :func:`to_datetime` on read.
+        """
+        if isinstance(value, date) and not isinstance(value, datetime):
+            return datetime.combine(value, datetime.min.time(), tzinfo=timezone.utc)
+        return value
+
     def create(self, data: dict[str, Any]) -> Transaction:
         """Create a transaction and return it with its generated id."""
         now = datetime.now(timezone.utc)
         payload = {
             **data,
+            "date": self._to_firestore_date(data.get("date")),
             "created_at": now,
             "updated_at": now,
         }
@@ -65,26 +78,32 @@ class TransactionRepository:
         search: Optional[str] = None,
     ) -> list[Transaction]:
         """Fetch transactions for a user with optional filters, newest first."""
-        query = self._collection().where("user_id", "==", user_id)
-
-        if type in ("income", "expense"):
-            query = query.where("type", "==", type)
-        if category:
-            query = query.where("category", "==", category)
-
-        # Note: Firestore does not support range + array filters without a
-        # composite index, and text search is not supported natively. We apply
-        # month/year/search filtering in Python after fetching the user's docs.
-        docs = query.order_by("created_at", direction="DESCENDING").limit(200).stream()
+        # We fetch by user_id only and filter/sort in Python to avoid
+        # Firestore composite-index requirements (e.g. filtering/order combined
+        # with a range or equality filter on another field).
+        docs = self._collection().where("user_id", "==", user_id).stream()
 
         results: list[Transaction] = []
         for doc in docs:
             data = doc.to_dict()
             tx = self._to_doc(doc.id, data, user_id)
+            if type in ("income", "expense") and tx.type != type:
+                continue
+            if category and tx.category != category:
+                continue
             if not self._matches_filters(tx, month, year, search):
                 continue
             results.append(tx)
 
+        # Newest first by created_at, then by id for stable ordering.
+        results.sort(
+            key=lambda tx: (
+                tx.created_at is None,
+                tx.created_at,
+                tx.id or "",
+            ),
+            reverse=True,
+        )
         return results[:limit]
 
     def list_paginated(
@@ -128,7 +147,11 @@ class TransactionRepository:
         existing = doc.to_dict()
         if existing.get("user_id") != user_id:
             return None
-        payload = {**data, "updated_at": datetime.now(timezone.utc)}
+        payload = {
+            **data,
+            "date": self._to_firestore_date(data.get("date", existing.get("date"))),
+            "updated_at": datetime.now(timezone.utc),
+        }
         ref.update(payload)
         merged = {**existing, **payload}
         return self._to_doc(transaction_id, merged, user_id)
@@ -146,13 +169,13 @@ class TransactionRepository:
 
     def get_by_type(self, user_id: str, type: str) -> list[Transaction]:
         """Return all transactions of a given type for a user."""
-        docs = (
-            self._collection()
-            .where("user_id", "==", user_id)
-            .where("type", "==", type)
-            .stream()
-        )
-        return [self._to_doc(d.id, d.to_dict(), user_id) for d in docs]
+        results = []
+        docs = self._collection().where("user_id", "==", user_id).stream()
+        for d in docs:
+            tx = self._to_doc(d.id, d.to_dict(), user_id)
+            if tx.type == type:
+                results.append(tx)
+        return results
 
     def get_by_date_range(
         self, user_id: str, start: date, end: date
@@ -205,15 +228,12 @@ class TransactionRepository:
         self, user_id: str, type: str = "expense"
     ) -> list[dict[str, Any]]:
         """Return per-category totals and percentages for a transaction type."""
-        docs = (
-            self._collection()
-            .where("user_id", "==", user_id)
-            .where("type", "==", type)
-            .stream()
-        )
         totals: dict[str, float] = {}
+        docs = self._collection().where("user_id", "==", user_id).stream()
         for doc in docs:
             data = doc.to_dict()
+            if data.get("type") != type:
+                continue
             cat = data.get("category") or "Uncategorized"
             totals[cat] = totals.get(cat, 0.0) + float(data.get("amount") or 0)
 
