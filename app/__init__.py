@@ -1,0 +1,2 @@
+"""DuitKu Backend application package."""
+
