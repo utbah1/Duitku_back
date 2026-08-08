@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     # Firebase
     FIREBASE_PROJECT_ID: str = ""
     FIREBASE_PRIVATE_KEY: str = ""
+    FIREBASE_PRIVATE_KEY_ID: str = ""
     FIREBASE_CLIENT_EMAIL: str = ""
     FIREBASE_CLIENT_ID: str = ""
     FIREBASE_SERVICE_ACCOUNT_KEY_PATH: str = "serviceAccountKey.json"
@@ -52,4 +53,3 @@ def get_settings() -> Settings:
 
 
 settings = get_settings()
-
