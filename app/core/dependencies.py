@@ -5,7 +5,7 @@ from typing import Annotated, Optional
 
 from fastapi import Depends, Header, HTTPException, status
 
-from app.core.security import InvalidTokenError, verify_firebase_token
+from app.core.security import InvalidTokenError, decode_access_token
 from app.models.user import CurrentUser
 from app.repositories.user_repository import UserRepository
 from app.services.user_service import UserService
@@ -47,12 +47,17 @@ def get_user_service(
 async def get_current_user(
     token: Annotated[str, Depends(get_bearer_token)],
 ) -> CurrentUser:
-    """Dependency that verifies the Firebase ID token and returns the user.
+    """Dependency that verifies the DuitKu access token and returns the user.
+
+    The backend issues its own signed JWT access tokens during login/register
+    (see `app.services.auth_service.AuthService._issue_access_token`). Those
+    tokens carry the Firebase `uid` in the `sub` claim. This dependency decodes
+    and validates that token, then reconstructs the current user from its claims.
 
     Raises HTTPException(401) if the token is invalid.
     """
     try:
-        claims = verify_firebase_token(token)
+        payload = decode_access_token(token)
     except InvalidTokenError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -60,7 +65,7 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         ) from exc
 
-    uid = claims.get("uid")
+    uid = payload.get("sub")
     if not uid:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -70,10 +75,8 @@ async def get_current_user(
 
     return CurrentUser(
         uid=uid,
-        email=claims.get("email"),
-        name=claims.get("name"),
-        phone_number=claims.get("phone_number"),
-        email_verified=claims.get("email_verified", False),
+        email=payload.get("email"),
+        name=payload.get("name"),
     )
 
 

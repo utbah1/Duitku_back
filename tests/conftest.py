@@ -175,7 +175,13 @@ def client(fake_db):
 
 @pytest.fixture
 def auth_headers():
-    return {"Authorization": "Bearer fake-firebase-token"}
+    from app.core.security import create_access_token
+
+    token = create_access_token(
+        subject="test-user-123",
+        extra={"email": "test@example.com", "name": "Test User"},
+    )
+    return {"Authorization": f"Bearer {token}"}
 
 
 @pytest.fixture

@@ -36,18 +36,15 @@ def test_dashboard_success(client, auth_headers):
 def test_dashboard_scoped_to_user(client, auth_headers):
     _seed(client, auth_headers)
 
-    from app.core import security
+    from app.core.security import create_access_token
 
-    class OtherVerifier:
-        def verify_token(self, token):
-            return {"uid": "other-user", "email": "other@example.com"}
-
-    security.token_verifier = OtherVerifier()
-    try:
-        resp = client.get("/api/v1/dashboard", headers=auth_headers)
-        assert resp.status_code == 200
-        data = resp.json()["data"]
-        assert data["total_income"] == 0
-        assert data["transaction_count"] == 0
-    finally:
-        security.token_verifier = security.FirebaseTokenVerifier()
+    other_token = create_access_token(
+        subject="other-user",
+        extra={"email": "other@example.com"},
+    )
+    other_headers = {"Authorization": f"Bearer {other_token}"}
+    resp = client.get("/api/v1/dashboard", headers=other_headers)
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["total_income"] == 0
+    assert data["transaction_count"] == 0

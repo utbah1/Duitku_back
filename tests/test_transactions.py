@@ -117,15 +117,12 @@ def test_user_cannot_access_others_transaction(client, auth_headers, sample_tran
     ).json()
     tid = created["id"]
 
-    from app.core import security
+    from app.core.security import create_access_token
 
-    class OtherVerifier:
-        def verify_token(self, token):
-            return {"uid": "other-user", "email": "other@example.com"}
-
-    security.token_verifier = OtherVerifier()
-    try:
-        resp = client.get(f"/api/v1/transactions/{tid}", headers=auth_headers)
-        assert resp.status_code == 404
-    finally:
-        security.token_verifier = security.FirebaseTokenVerifier()
+    other_token = create_access_token(
+        subject="other-user",
+        extra={"email": "other@example.com"},
+    )
+    other_headers = {"Authorization": f"Bearer {other_token}"}
+    resp = client.get(f"/api/v1/transactions/{tid}", headers=other_headers)
+    assert resp.status_code == 404
